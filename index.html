@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>ChartPilot — AI Trading Copilot</title>
+  <meta name="description" content="A trading chart you can talk to. Live crypto candlesticks with an AI copilot panel.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23131722'/%3E%3Cpath d='M6 22 L12 14 L17 18 L26 7' stroke='%23f0a830' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <!-- Pinned to a known-stable version deliberately -- v5 changed the series-creation API and
+       this build hasn't been verified against it. See README note. -->
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="topbar-brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 18 L9 10 L13 14 L21 4" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span class="brand-name">ChartPilot</span>
+        <span class="brand-tag">M1</span>
+      </div>
+      <div class="topbar-status" id="conn-status" aria-live="polite">
+        <span class="status-dot" data-state="connecting"></span>
+        <span class="status-text">Connecting…</span>
+      </div>
+      <div class="topbar-actions">
+        <button type="button" class="icon-btn" id="fullscreen-btn" aria-label="Toggle fullscreen chart">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button type="button" class="icon-btn copilot-toggle" id="copilot-open-btn" aria-expanded="false" aria-controls="copilot">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 4h16v11H8l-4 4z" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/></svg>
+          <span>Copilot</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <nav class="watchlist-strip" id="watchlist" aria-label="Watchlist"></nav>
+
+      <main class="chart-panel">
+        <div class="chart-toolbar">
+          <div class="symbol-price">
+            <span class="symbol-name" id="active-symbol">BTC/USD</span>
+            <span class="live-price" id="live-price">—</span>
+            <span class="price-change" id="price-change">—</span>
+          </div>
+          <div class="timeframe-group" role="group" aria-label="Timeframe" id="timeframe-group"></div>
+        </div>
+        <div class="chart-container" id="chart-container">
+          <div class="chart-loading" id="chart-loading">Waiting for Kraken data…</div>
+        </div>
+      </main>
+
+      <aside id="copilot" popover="manual" aria-label="AI Copilot">
+        <script>
+          if (matchMedia('(min-width: 901px)').matches) {
+            document.getElementById('copilot').removeAttribute('popover');
+          }
+        </script>
+        <header class="copilot-header">
+          <div class="copilot-title">
+            <span>AI Copilot</span>
+            <span class="copilot-badge" id="copilot-badge">not connected</span>
+          </div>
+          <div class="copilot-header-actions">
+            <button type="button" class="text-btn" id="copilot-clear-btn">Clear</button>
+            <button type="button" class="icon-btn copilot-close" id="copilot-close-btn" aria-label="Close copilot">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+        </header>
+
+        <div class="copilot-messages" id="copilot-messages" aria-live="polite"></div>
+
+        <div class="copilot-prompts" id="copilot-prompts"></div>
+
+        <form class="copilot-input-row" id="copilot-form">
+          <input type="text" id="copilot-input" placeholder="Ask about the chart…" autocomplete="off" aria-label="Message the AI copilot">
+          <button type="submit" class="send-btn" aria-label="Send">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 12l16-8-6 8 6 8z" fill="currentColor"/></svg>
+          </button>
+        </form>
+      </aside>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
