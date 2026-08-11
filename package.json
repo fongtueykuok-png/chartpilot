@@ -1,0 +1,7 @@
+{
+  "name": "chartpilot",
+  "private": true,
+  "devDependencies": {
+    "@netlify/functions": "^5.3.0"
+  }
+}
