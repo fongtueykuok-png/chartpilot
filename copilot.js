@@ -1,9 +1,9 @@
 // copilot.js
-// UI-complete AI Copilot panel. NOT wired to a model in Milestone 1 -- this
-// is the interface only. Every reply is an explicit system notice, never a
-// hard-coded "AI" answer, so nothing here can be mistaken for real analysis.
-// Milestone 3 replaces the body of respond() with a real model call, using
-// the same appendMessage/loading plumbing already built here.
+// AI Copilot panel, wired to a real model (Milestone 3) via the
+// /api/copilot Netlify Function -- see netlify/functions/copilot.mts.
+// Two failure modes are shown as genuine errors, never papered over:
+// market data being down (no context to send) and the backend call itself
+// failing (network/model error). Neither is a fake/simulated message.
 
 const SUGGESTED_PROMPTS = [
   "What's the trend?",
@@ -38,6 +38,9 @@ export function initCopilot({ getChartContext, getConnectionStatus }) {
     if (role === 'user') {
       el.className = 'msg msg-user';
       el.textContent = text;
+    } else if (role === 'ai') {
+      el.className = 'msg msg-ai';
+      el.textContent = text;
     } else {
       el.className = 'msg msg-system' + (error ? ' msg-error' : '');
       const tag = document.createElement('span');
@@ -59,33 +62,46 @@ export function initCopilot({ getChartContext, getConnectionStatus }) {
     return el;
   }
 
-  function respond(userText) {
+  async function respond(userText) {
     const loadingEl = appendLoading();
-    const delay = 500 + Math.random() * 400;
-    setTimeout(() => {
+
+    // Genuine, not simulated: if the market data socket is down there
+    // really is no chart context to reason about, so say that instead of
+    // calling the model with empty/stale context.
+    if (getConnectionStatus() !== 'live') {
+      loadingEl.remove();
+      appendMessage(
+        'system',
+        "Can't read the chart right now \u2014 the market data connection is down, so there's no context to analyze.",
+        { error: true }
+      );
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/copilot', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message: userText, chartContext: getChartContext() }),
+      });
       loadingEl.remove();
 
-      // This is a genuine, not simulated, error condition: if the market
-      // data socket is down there really is no chart context to reason
-      // about, so it's reported as such rather than papered over.
-      if (getConnectionStatus() !== 'live') {
-        appendMessage(
-          'system',
-          "Can't read the chart right now \u2014 the market data connection is down, so there's no context to analyze.",
-          { error: true }
-        );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        appendMessage('system', body.error || 'The copilot backend returned an error. Try again in a moment.', {
+          error: true,
+        });
         return;
       }
 
-      const ctx = getChartContext();
-      const ctxLine = ctx.symbol
-        ? `${ctx.symbol} \u00b7 ${ctx.timeframe}m \u00b7 last price ${ctx.price ?? '\u2014'}`
-        : 'no symbol loaded yet';
-      appendMessage(
-        'system',
-        `Not connected to a model yet \u2014 Milestone 1 ships the interface only. Once Milestone 3 wires one in, "${userText}" would go out with live chart context (${ctxLine}).`
-      );
-    }, delay);
+      const data = await res.json();
+      appendMessage('ai', data.reply);
+    } catch {
+      loadingEl.remove();
+      appendMessage('system', "Couldn't reach the copilot backend. Check your connection and try again.", {
+        error: true,
+      });
+    }
   }
 
   function handleSend(text) {
