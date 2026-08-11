@@ -308,6 +308,11 @@ button { cursor: pointer; background: none; border: none; }
 
 .msg { max-width: 88%; padding: 8px 11px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.45; }
 .msg-user { align-self: flex-end; background: var(--accent-dim); border: 1px solid var(--accent); }
+.msg-ai {
+  align-self: flex-start;
+  background: var(--bg-elevated-2);
+  border: 1px solid var(--border);
+}
 .msg-system {
   align-self: stretch;
   max-width: 100%;
