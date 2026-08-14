@@ -1,9 +1,15 @@
 // copilot.js
 // AI Copilot panel, wired to a real model (Milestone 3) via the
 // /api/copilot Netlify Function -- see netlify/functions/copilot.mts.
-// Two failure modes are shown as genuine errors, never papered over:
-// market data being down (no context to send) and the backend call itself
-// failing (network/model error). Neither is a fake/simulated message.
+// Failure modes are shown as genuine errors, never papered over: market
+// data being down (no context to send), a rate limit (429), and the
+// backend call itself failing (network/model error). None are simulated.
+//
+// M4: conversation memory. Prior turns are kept client-side and replayed on
+// every request so follow-ups ("what about on a shorter timeframe?") have
+// something to refer back to. Capped at HISTORY_LIMIT -- the server enforces
+// its own cap too, since this is a public endpoint and the client-side cap
+// is UX, not a security boundary.
 
 const SUGGESTED_PROMPTS = [
   "What's the trend?",
@@ -14,6 +20,8 @@ const SUGGESTED_PROMPTS = [
   'Summarize this chart.',
 ];
 
+const HISTORY_LIMIT = 10; // 5 user/assistant exchanges
+
 export function initCopilot({ getChartContext, getConnectionStatus }) {
   const panel = document.getElementById('copilot');
   const messagesEl = document.getElementById('copilot-messages');
@@ -23,6 +31,8 @@ export function initCopilot({ getChartContext, getConnectionStatus }) {
   const clearBtn = document.getElementById('copilot-clear-btn');
   const openBtn = document.getElementById('copilot-open-btn');
   const closeBtn = document.getElementById('copilot-close-btn');
+
+  let history = []; // [{role: 'user'|'assistant', content: string}]
 
   function renderEmptyState() {
     messagesEl.innerHTML = '';
@@ -78,11 +88,13 @@ export function initCopilot({ getChartContext, getConnectionStatus }) {
       return;
     }
 
+    const nextHistory = [...history, { role: 'user', content: userText }].slice(-HISTORY_LIMIT);
+
     try {
       const res = await fetch('/api/copilot', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ message: userText, chartContext: getChartContext() }),
+        body: JSON.stringify({ history: nextHistory, chartContext: getChartContext() }),
       });
       loadingEl.remove();
 
@@ -91,11 +103,12 @@ export function initCopilot({ getChartContext, getConnectionStatus }) {
         appendMessage('system', body.error || 'The copilot backend returned an error. Try again in a moment.', {
           error: true,
         });
-        return;
+        return; // failed turn is not retained in history -- would break user/assistant alternation
       }
 
       const data = await res.json();
       appendMessage('ai', data.reply);
+      history = [...nextHistory, { role: 'assistant', content: data.reply }].slice(-HISTORY_LIMIT);
     } catch {
       loadingEl.remove();
       appendMessage('system', "Couldn't reach the copilot backend. Check your connection and try again.", {
@@ -126,7 +139,10 @@ export function initCopilot({ getChartContext, getConnectionStatus }) {
     promptsEl.appendChild(chip);
   });
 
-  clearBtn.addEventListener('click', renderEmptyState);
+  clearBtn.addEventListener('click', () => {
+    history = [];
+    renderEmptyState();
+  });
   renderEmptyState();
 
   // --- Mobile bottom-sheet wiring ---

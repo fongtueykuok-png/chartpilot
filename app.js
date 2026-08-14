@@ -14,9 +14,34 @@ const TIMEFRAMES = [
 const WATCHLIST_SYMBOLS = ['BTC/USD', 'ETH/USD', 'SOL/USD', 'XRP/USD', 'DOGE/USD'];
 const DEFAULT_SYMBOL = 'BTC/USD';
 const DEFAULT_TIMEFRAME_MINUTES = 60;
+const VIEW_STORAGE_KEY = 'chartpilot:last-view';
 
-let activeSymbol = DEFAULT_SYMBOL;
-let activeInterval = DEFAULT_TIMEFRAME_MINUTES;
+// Remembers the last symbol/timeframe across reloads. Validated against the
+// current watchlist/timeframe lists so a stale or hand-edited value can't
+// leave the app pointed at a symbol/timeframe combo it can't render.
+function loadSavedView() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(VIEW_STORAGE_KEY));
+    if (parsed && WATCHLIST_SYMBOLS.includes(parsed.symbol) && TIMEFRAMES.some((tf) => tf.minutes === parsed.interval)) {
+      return parsed;
+    }
+  } catch {
+    // corrupted or old-shape value -- fall back to defaults
+  }
+  return null;
+}
+
+function saveView() {
+  try {
+    localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify({ symbol: activeSymbol, interval: activeInterval }));
+  } catch {
+    // private browsing / storage disabled -- not worth surfacing to the user
+  }
+}
+
+const savedView = loadSavedView();
+let activeSymbol = savedView?.symbol ?? DEFAULT_SYMBOL;
+let activeInterval = savedView?.interval ?? DEFAULT_TIMEFRAME_MINUTES;
 let connectionStatus = 'connecting';
 let lastHeaderPrice = null;
 
@@ -66,6 +91,7 @@ function switchTimeframe(minutes) {
   renderTimeframes();
   chartLoading.classList.remove('hidden');
   chartController.setSymbolTimeframe(activeSymbol, activeInterval);
+  saveView();
 }
 
 function switchSymbol(symbol) {
@@ -78,6 +104,7 @@ function switchSymbol(symbol) {
   document.querySelectorAll('.watch-chip').forEach((chip) => {
     chip.setAttribute('aria-pressed', String(chip.dataset.symbol === symbol));
   });
+  saveView();
 }
 
 // --- Watchlist ---
