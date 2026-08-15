@@ -22,7 +22,7 @@ const SUGGESTED_PROMPTS = [
 
 const HISTORY_LIMIT = 10; // 5 user/assistant exchanges
 
-export function initCopilot({ getChartContext, getConnectionStatus }) {
+export function initCopilot({ getChartContext, getConnectionStatus, getAssetClass }) {
   const panel = document.getElementById('copilot');
   const messagesEl = document.getElementById('copilot-messages');
   const promptsEl = document.getElementById('copilot-prompts');
@@ -94,7 +94,7 @@ export function initCopilot({ getChartContext, getConnectionStatus }) {
       const res = await fetch('/api/copilot', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ history: nextHistory, chartContext: getChartContext() }),
+        body: JSON.stringify({ history: nextHistory, chartContext: getChartContext(), assetClass: getAssetClass?.() ?? 'crypto' }),
       });
       loadingEl.remove();
 

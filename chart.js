@@ -11,7 +11,12 @@
 // in netlify/functions/copilot.mts stays true: a value here is either a real
 // number or genuinely absent (buffer too short), never guessed.
 
-import { subscribeOHLC } from './market-data.js';
+// No static import of a data source here on purpose. M5: chart.js now
+// serves both crypto (Kraken) and stocks (Alpaca) -- the caller passes
+// whichever asset class's subscribeOHLC function it wants in
+// setSymbolTimeframe, so this file stays source-agnostic. It only cares
+// that bars arrive shaped like {interval_begin, open, high, low, close,
+// volume}, which both market-data.js and stocks-data.js normalize to.
 
 const UP_COLOR = '#26a69a';
 const DOWN_COLOR = '#ef5350';
@@ -157,8 +162,8 @@ export function createChartController(container, { onData } = {}) {
     return { trend, indicators };
   }
 
-  function handleKrakenUpdate(type, krakenBars) {
-    const mapped = krakenBars.map(toBar).sort((a, b) => a.time - b.time);
+  function handleBarUpdate(type, rawBars) {
+    const mapped = rawBars.map(toBar).sort((a, b) => a.time - b.time);
     if (mapped.length === 0) return;
 
     if (type === 'snapshot') {
@@ -180,7 +185,7 @@ export function createChartController(container, { onData } = {}) {
     onData?.();
   }
 
-  function setSymbolTimeframe(symbol, interval) {
+  function setSymbolTimeframe(symbol, interval, subscribeOHLCFn) {
     if (unsubscribeFn) unsubscribeFn();
     currentSymbol = symbol;
     currentInterval = interval;
@@ -190,7 +195,7 @@ export function createChartController(container, { onData } = {}) {
     bars = [];
     series.setData([]);
     volumeSeries.setData([]);
-    unsubscribeFn = subscribeOHLC(symbol, interval, handleKrakenUpdate);
+    unsubscribeFn = subscribeOHLCFn(symbol, interval, handleBarUpdate);
   }
 
   return {

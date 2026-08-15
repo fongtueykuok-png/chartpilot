@@ -1,5 +1,6 @@
 // app.js
-import { connectKraken, subscribeTicker, onStatusChange } from './market-data.js';
+import * as krakenData from './market-data.js';
+import * as stocksData from './stocks-data.js';
 import { createChartController } from './chart.js';
 import { initCopilot } from './copilot.js';
 
@@ -11,20 +12,60 @@ const TIMEFRAMES = [
   { label: '4H', minutes: 240 },
   { label: '1D', minutes: 1440 },
 ];
-const WATCHLIST_SYMBOLS = ['BTC/USD', 'ETH/USD', 'SOL/USD', 'XRP/USD', 'DOGE/USD'];
-const DEFAULT_SYMBOL = 'BTC/USD';
-const DEFAULT_TIMEFRAME_MINUTES = 60;
-const VIEW_STORAGE_KEY = 'chartpilot:last-view';
 
-// Remembers the last symbol/timeframe across reloads. Validated against the
-// current watchlist/timeframe lists so a stale or hand-edited value can't
-// leave the app pointed at a symbol/timeframe combo it can't render.
-function loadSavedView() {
+// M5: multi-asset-class. Stocks (Alpaca, US equities, IEX feed, free) sit
+// alongside the original crypto (Kraken) support -- neither replaces the
+// other. Crypto's watchlist stays a fixed curated 5; stocks starts with a
+// curated 18 across sectors but is searchable/extensible up to
+// maxWatchlist, since Alpaca's tradable universe is thousands of tickers
+// wide and a hardcoded list would undersell what's actually reachable.
+const ASSET_CLASSES = {
+  crypto: {
+    label: 'Crypto',
+    sourceLabel: 'Kraken',
+    baseWatchlist: ['BTC/USD', 'ETH/USD', 'SOL/USD', 'XRP/USD', 'DOGE/USD'],
+    defaultSymbol: 'BTC/USD',
+    defaultInterval: 60,
+    connect: krakenData.connectKraken,
+    disconnect: null, // Kraken's WS is meant to stay open -- crypto is 24/7, no reason to tear it down
+    subscribeTicker: krakenData.subscribeTicker,
+    subscribeOHLC: krakenData.subscribeOHLC,
+    onStatusChange: krakenData.onStatusChange,
+    hasMarketHours: false,
+    searchable: false,
+    maxWatchlist: 5,
+  },
+  stocks: {
+    label: 'Stocks',
+    sourceLabel: 'Alpaca \u00b7 IEX',
+    baseWatchlist: ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'JPM', 'V', 'WMT', 'JNJ', 'PG', 'XOM', 'KO', 'DIS', 'NFLX', 'AMD', 'BA'],
+    defaultSymbol: 'AAPL',
+    defaultInterval: 60,
+    connect: stocksData.connectAlpaca,
+    disconnect: stocksData.disconnectAlpaca, // paused when not the active tab -- Alpaca's free-tier request budget is shared across every visitor
+    subscribeTicker: stocksData.subscribeTicker,
+    subscribeOHLC: stocksData.subscribeOHLC,
+    onStatusChange: stocksData.onStatusChange,
+    hasMarketHours: true,
+    searchable: true,
+    maxWatchlist: 40,
+  },
+};
+
+const CLASS_STORAGE_KEY = 'chartpilot:asset-class';
+const STOCKS_WATCHLIST_KEY = 'chartpilot:stocks-watchlist';
+
+function viewStorageKey(cls) {
+  return `chartpilot:last-view:${cls}`;
+}
+
+// Remembers the last symbol/timeframe per asset class across reloads.
+// Validated against that class's current watchlist/timeframe lists so a
+// stale value can't leave the app pointed at a combo it can't render.
+function loadSavedView(cls) {
   try {
-    const parsed = JSON.parse(localStorage.getItem(VIEW_STORAGE_KEY));
-    if (parsed && WATCHLIST_SYMBOLS.includes(parsed.symbol) && TIMEFRAMES.some((tf) => tf.minutes === parsed.interval)) {
-      return parsed;
-    }
+    const parsed = JSON.parse(localStorage.getItem(viewStorageKey(cls)));
+    if (parsed && TIMEFRAMES.some((tf) => tf.minutes === parsed.interval)) return parsed;
   } catch {
     // corrupted or old-shape value -- fall back to defaults
   }
@@ -33,18 +74,56 @@ function loadSavedView() {
 
 function saveView() {
   try {
-    localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify({ symbol: activeSymbol, interval: activeInterval }));
+    localStorage.setItem(viewStorageKey(currentClass), JSON.stringify({ symbol: activeSymbol, interval: activeInterval }));
   } catch {
     // private browsing / storage disabled -- not worth surfacing to the user
   }
 }
 
-const savedView = loadSavedView();
-let activeSymbol = savedView?.symbol ?? DEFAULT_SYMBOL;
-let activeInterval = savedView?.interval ?? DEFAULT_TIMEFRAME_MINUTES;
+function loadStocksWatchlist() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STOCKS_WATCHLIST_KEY));
+    if (Array.isArray(parsed) && parsed.every((s) => typeof s === 'string')) return parsed;
+  } catch {
+    // ignore
+  }
+  return ASSET_CLASSES.stocks.baseWatchlist.slice();
+}
+
+function saveStocksWatchlist() {
+  try {
+    localStorage.setItem(STOCKS_WATCHLIST_KEY, JSON.stringify(stocksWatchlist));
+  } catch {
+    // private browsing / storage disabled
+  }
+}
+
+function loadSavedClass() {
+  const v = localStorage.getItem(CLASS_STORAGE_KEY);
+  return v === 'stocks' ? 'stocks' : 'crypto';
+}
+
+// --- State ---
+let currentClass = loadSavedClass();
+let stocksWatchlist = loadStocksWatchlist();
+const initialSaved = loadSavedView(currentClass);
+let activeSymbol = initialSaved?.symbol ?? ASSET_CLASSES[currentClass].defaultSymbol;
+let activeInterval = initialSaved?.interval ?? ASSET_CLASSES[currentClass].defaultInterval;
 let connectionStatus = 'connecting';
 let lastHeaderPrice = null;
+let unsubscribeTickerFn = null;
+let marketClock = null;
+let marketClockTimer = null;
 
+function activeConfig() {
+  return ASSET_CLASSES[currentClass];
+}
+
+function activeWatchlist() {
+  return currentClass === 'stocks' ? stocksWatchlist : activeConfig().baseWatchlist;
+}
+
+// --- DOM ---
 const chartContainer = document.getElementById('chart-container');
 const chartLoading = document.getElementById('chart-loading');
 const statusDot = document.querySelector('#conn-status .status-dot');
@@ -56,20 +135,66 @@ const timeframeGroup = document.getElementById('timeframe-group');
 const watchlistEl = document.getElementById('watchlist');
 const fullscreenBtn = document.getElementById('fullscreen-btn');
 const copilotBadge = document.getElementById('copilot-badge');
+const classToggleEl = document.getElementById('class-toggle');
+const searchWrapEl = document.getElementById('symbol-search-wrap');
+const searchInputEl = document.getElementById('symbol-search-input');
+const searchResultsEl = document.getElementById('symbol-search-results');
 
 const chartController = createChartController(chartContainer, {
   onData: () => chartLoading.classList.add('hidden'),
 });
 
-// --- Connection status ---
-onStatusChange((state) => {
-  connectionStatus = state;
-  statusDot.dataset.state = state;
+// --- Connection + market-hours status display ---
+function formatClockTime(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+}
+
+function updateStatusDisplay() {
+  const config = activeConfig();
+  if (config.hasMarketHours && marketClock && marketClock.is_open === false) {
+    statusDot.dataset.state = 'closed';
+    statusText.textContent = marketClock.next_open ? `Market closed \u00b7 reopens ${formatClockTime(marketClock.next_open)}` : 'Market closed';
+    copilotBadge.textContent = 'market closed';
+    copilotBadge.dataset.live = 'false';
+    return;
+  }
+  statusDot.dataset.state = connectionStatus;
   statusText.textContent =
-    state === 'live' ? 'Live \u00b7 Kraken' : state === 'connecting' ? 'Connecting\u2026' : 'Reconnecting\u2026';
-  copilotBadge.textContent = state === 'live' ? 'watching chart' : 'not connected';
-  copilotBadge.dataset.live = String(state === 'live');
-});
+    connectionStatus === 'live' ? `Live \u00b7 ${config.sourceLabel}` : connectionStatus === 'connecting' ? 'Connecting\u2026' : 'Reconnecting\u2026';
+  copilotBadge.textContent = connectionStatus === 'live' ? 'watching chart' : 'not connected';
+  copilotBadge.dataset.live = String(connectionStatus === 'live');
+}
+
+function handleStatus(cls, state) {
+  if (cls !== currentClass) return; // ignore updates from the inactive data source
+  connectionStatus = state;
+  updateStatusDisplay();
+}
+krakenData.onStatusChange((state) => handleStatus('crypto', state));
+stocksData.onStatusChange((state) => handleStatus('stocks', state));
+
+async function refreshMarketClock() {
+  if (!activeConfig().hasMarketHours) return;
+  try {
+    marketClock = await stocksData.getMarketClock();
+  } catch {
+    marketClock = null;
+  }
+  updateStatusDisplay();
+}
+
+function startMarketClockPolling() {
+  stopMarketClockPolling();
+  refreshMarketClock();
+  marketClockTimer = setInterval(refreshMarketClock, 60000);
+}
+
+function stopMarketClockPolling() {
+  if (marketClockTimer) clearInterval(marketClockTimer);
+  marketClockTimer = null;
+  marketClock = null;
+}
 
 // --- Timeframe controls ---
 function renderTimeframes() {
@@ -90,7 +215,7 @@ function switchTimeframe(minutes) {
   activeInterval = minutes;
   renderTimeframes();
   chartLoading.classList.remove('hidden');
-  chartController.setSymbolTimeframe(activeSymbol, activeInterval);
+  chartController.setSymbolTimeframe(activeSymbol, activeInterval, activeConfig().subscribeOHLC);
   saveView();
 }
 
@@ -100,17 +225,66 @@ function switchSymbol(symbol) {
   symbolNameEl.textContent = symbol;
   lastHeaderPrice = null;
   chartLoading.classList.remove('hidden');
-  chartController.setSymbolTimeframe(activeSymbol, activeInterval);
+  chartController.setSymbolTimeframe(activeSymbol, activeInterval, activeConfig().subscribeOHLC);
   document.querySelectorAll('.watch-chip').forEach((chip) => {
     chip.setAttribute('aria-pressed', String(chip.dataset.symbol === symbol));
   });
   saveView();
 }
 
+// --- Asset class switching ---
+function renderClassToggle() {
+  classToggleEl.innerHTML = '';
+  Object.entries(ASSET_CLASSES).forEach(([key, cfg]) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'class-btn';
+    btn.textContent = cfg.label;
+    btn.setAttribute('aria-pressed', String(key === currentClass));
+    btn.addEventListener('click', () => switchAssetClass(key));
+    classToggleEl.appendChild(btn);
+  });
+}
+
+function switchAssetClass(cls) {
+  if (cls === currentClass || !ASSET_CLASSES[cls]) return;
+  const prevConfig = activeConfig();
+  prevConfig.disconnect?.();
+  if (unsubscribeTickerFn) unsubscribeTickerFn();
+  stopMarketClockPolling();
+  closeSearchResults();
+
+  currentClass = cls;
+  localStorage.setItem(CLASS_STORAGE_KEY, cls);
+  const config = activeConfig();
+
+  const saved = loadSavedView(cls);
+  activeSymbol = saved?.symbol ?? config.defaultSymbol;
+  activeInterval = saved?.interval ?? config.defaultInterval;
+
+  searchWrapEl.classList.toggle('hidden', !config.searchable);
+  symbolNameEl.textContent = activeSymbol;
+  lastHeaderPrice = null;
+  connectionStatus = 'connecting';
+
+  renderClassToggle();
+  renderTimeframes();
+  renderWatchlist();
+  updateStatusDisplay();
+
+  config.connect?.();
+  if (config.hasMarketHours) startMarketClockPolling();
+
+  chartLoading.classList.remove('hidden');
+  chartController.setSymbolTimeframe(activeSymbol, activeInterval, config.subscribeOHLC);
+  unsubscribeTickerFn = config.subscribeTicker(activeWatchlist(), (type, tick) => updateWatchlistRow(tick));
+  saveView();
+}
+
 // --- Watchlist ---
 function renderWatchlist() {
   watchlistEl.innerHTML = '';
-  WATCHLIST_SYMBOLS.forEach((symbol) => {
+  activeWatchlist().forEach((symbol) => {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'watch-chip';
@@ -157,6 +331,70 @@ function updateWatchlistRow(tick) {
   if (tick.symbol === activeSymbol) updateHeaderPrice(tick);
 }
 
+// --- Symbol search (stocks only) ---
+// Alpaca's tradable universe is thousands of tickers -- searched server-side
+// (see /api/stocks?action=search) rather than shipping the whole list to
+// the browser. Selecting a result both charts it and pins it to the
+// watchlist (capped at maxWatchlist) so it keeps ticking after the search
+// box closes.
+let searchDebounceTimer = null;
+
+function closeSearchResults() {
+  searchResultsEl.innerHTML = '';
+  searchResultsEl.classList.add('hidden');
+}
+
+function renderSearchResults(results) {
+  searchResultsEl.innerHTML = '';
+  if (results.length === 0) {
+    searchResultsEl.classList.add('hidden');
+    return;
+  }
+  results.forEach((r) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'search-result';
+    item.innerHTML = `<span class="sr-symbol">${r.s}</span><span class="sr-name">${r.n}</span>`;
+    item.addEventListener('click', () => selectSearchResult(r.s));
+    searchResultsEl.appendChild(item);
+  });
+  searchResultsEl.classList.remove('hidden');
+}
+
+function selectSearchResult(symbol) {
+  if (!stocksWatchlist.includes(symbol) && stocksWatchlist.length < activeConfig().maxWatchlist) {
+    stocksWatchlist = [...stocksWatchlist, symbol];
+    saveStocksWatchlist();
+    renderWatchlist();
+    if (unsubscribeTickerFn) unsubscribeTickerFn();
+    unsubscribeTickerFn = activeConfig().subscribeTicker(activeWatchlist(), (type, tick) => updateWatchlistRow(tick));
+  }
+  searchInputEl.value = '';
+  closeSearchResults();
+  switchSymbol(symbol);
+}
+
+searchInputEl.addEventListener('input', () => {
+  const query = searchInputEl.value.trim();
+  clearTimeout(searchDebounceTimer);
+  if (!query) {
+    closeSearchResults();
+    return;
+  }
+  searchDebounceTimer = setTimeout(async () => {
+    try {
+      const results = await stocksData.searchStocks(query);
+      renderSearchResults(results);
+    } catch {
+      closeSearchResults();
+    }
+  }, 250);
+});
+
+document.addEventListener('click', (e) => {
+  if (!searchWrapEl.contains(e.target)) closeSearchResults();
+});
+
 // --- Fullscreen ---
 fullscreenBtn.addEventListener('click', () => chartController.toggleFullscreen());
 
@@ -175,13 +413,20 @@ desktopQuery.addEventListener('change', syncCopilotMode);
 syncCopilotMode(desktopQuery);
 
 // --- Init ---
+renderClassToggle();
 renderTimeframes();
 renderWatchlist();
+searchWrapEl.classList.toggle('hidden', !activeConfig().searchable);
+symbolNameEl.textContent = activeSymbol;
+updateStatusDisplay();
+
 initCopilot({
   getChartContext: () => chartController.getContext(),
   getConnectionStatus: () => connectionStatus,
+  getAssetClass: () => currentClass,
 });
 
-connectKraken();
-subscribeTicker(WATCHLIST_SYMBOLS, (type, tick) => updateWatchlistRow(tick));
-chartController.setSymbolTimeframe(activeSymbol, activeInterval);
+activeConfig().connect?.();
+if (activeConfig().hasMarketHours) startMarketClockPolling();
+unsubscribeTickerFn = activeConfig().subscribeTicker(activeWatchlist(), (type, tick) => updateWatchlistRow(tick));
+chartController.setSymbolTimeframe(activeSymbol, activeInterval, activeConfig().subscribeOHLC);

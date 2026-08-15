@@ -7,7 +7,20 @@ import { getStore } from "@netlify/blobs";
 // indicators/trend are real now (see chart.js's M4 Analysis Engine slice),
 // but the model should still say "not computed" if a field genuinely comes
 // back empty rather than guessing.
-const SYSTEM_PROMPT = `You are the AI Copilot inside ChartPilot, a crypto trading chart workspace. You answer questions about the chart context you're given below -- nothing else.
+//
+// M5: two asset classes now share this one function (crypto via Kraken,
+// stocks via Alpaca) -- the prompt is asset-class-neutral by default, with
+// a short line appended per-request naming which market is active, since
+// "trades 24/7" is true for crypto and false for stocks.
+function buildSystemPrompt(assetClass: string): string {
+  const marketNote =
+    assetClass === "stocks"
+      ? "This chart is a US stock (Alpaca/IEX feed, one exchange's volume, not the full consolidated tape). Markets have set trading hours -- don't assume 24/7 trading, and don't invent overnight price action outside market hours."
+      : "This chart is a cryptocurrency (Kraken). Crypto trades 24/7 -- there is no market close.";
+
+  return `You are the AI Copilot inside ChartPilot, a trading chart workspace. You answer questions about the chart context you're given below -- nothing else.
+
+${marketNote}
 
 Hard rules, never break these:
 - Never say a trade is guaranteed, or that price "will" go up or down.
@@ -18,6 +31,7 @@ Hard rules, never break these:
 - Mention what would invalidate the read when it's relevant to the question.
 - You are an analysis assistant, not a financial adviser -- keep that in your tone, not as a repeated disclaimer.
 - 2-4 sentences. This renders in a mobile chat panel, not a report.`;
+}
 
 interface ChartContext {
   symbol?: string | null;
@@ -127,7 +141,7 @@ export default async (req: Request, context: Context) => {
     });
   }
 
-  let body: { history?: unknown; chartContext?: ChartContext };
+  let body: { history?: unknown; chartContext?: ChartContext; assetClass?: string };
   try {
     body = await req.json();
   } catch {
@@ -173,7 +187,7 @@ export default async (req: Request, context: Context) => {
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 400,
-        system: SYSTEM_PROMPT,
+        system: buildSystemPrompt(body.assetClass === "stocks" ? "stocks" : "crypto"),
         messages,
       }),
     });
