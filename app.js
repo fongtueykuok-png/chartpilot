@@ -144,6 +144,19 @@ const chartController = createChartController(chartContainer, {
   onData: () => chartLoading.classList.add('hidden'),
 });
 
+const CHART_LOADING_TEXT = 'Loading chart data\u2026';
+
+// Called right before every fresh subscribe (symbol/timeframe/class switch)
+// so a leftover error message from a previous failed load doesn't linger
+// on screen for a switch that hasn't even had a chance to succeed or fail
+// yet. updateChartLoadingMessage() below is what escalates it back to an
+// error state if this new attempt also fails.
+function resetChartLoading() {
+  chartLoading.textContent = CHART_LOADING_TEXT;
+  chartLoading.classList.remove('error');
+  chartLoading.classList.remove('hidden');
+}
+
 // --- Connection + market-hours status display ---
 function formatClockTime(iso) {
   if (!iso) return '';
@@ -166,10 +179,31 @@ function updateStatusDisplay() {
   copilotBadge.dataset.live = String(connectionStatus === 'live');
 }
 
+// Reflects connection trouble onto the chart pane itself, not just the
+// topbar dot -- otherwise a hard failure (e.g. Alpaca creds not configured
+// yet) just leaves "Loading chart data…" on screen forever with nothing to
+// tell it apart from a normal brief load. Only touches the overlay while
+// it's still showing (i.e. no data has come in yet for the current
+// symbol) -- once real bars have rendered, a later poll hiccup shouldn't
+// yank the chart back into an error state over a chart that's already
+// live and up to date.
+function updateChartLoadingMessage() {
+  if (chartLoading.classList.contains('hidden')) return;
+  if (connectionStatus === 'reconnecting' || connectionStatus === 'offline') {
+    const detail = currentClass === 'stocks' ? stocksData.getLastError() : null;
+    chartLoading.textContent = detail || 'Data unavailable \u2014 retrying\u2026';
+    chartLoading.classList.add('error');
+  } else {
+    chartLoading.textContent = CHART_LOADING_TEXT;
+    chartLoading.classList.remove('error');
+  }
+}
+
 function handleStatus(cls, state) {
   if (cls !== currentClass) return; // ignore updates from the inactive data source
   connectionStatus = state;
   updateStatusDisplay();
+  updateChartLoadingMessage();
 }
 krakenData.onStatusChange((state) => handleStatus('crypto', state));
 stocksData.onStatusChange((state) => handleStatus('stocks', state));
@@ -214,7 +248,7 @@ function switchTimeframe(minutes) {
   if (minutes === activeInterval) return;
   activeInterval = minutes;
   renderTimeframes();
-  chartLoading.classList.remove('hidden');
+  resetChartLoading();
   chartController.setSymbolTimeframe(activeSymbol, activeInterval, activeConfig().subscribeOHLC);
   saveView();
 }
@@ -224,7 +258,7 @@ function switchSymbol(symbol) {
   activeSymbol = symbol;
   symbolNameEl.textContent = symbol;
   lastHeaderPrice = null;
-  chartLoading.classList.remove('hidden');
+  resetChartLoading();
   chartController.setSymbolTimeframe(activeSymbol, activeInterval, activeConfig().subscribeOHLC);
   document.querySelectorAll('.watch-chip').forEach((chip) => {
     chip.setAttribute('aria-pressed', String(chip.dataset.symbol === symbol));
@@ -275,7 +309,7 @@ function switchAssetClass(cls) {
   config.connect?.();
   if (config.hasMarketHours) startMarketClockPolling();
 
-  chartLoading.classList.remove('hidden');
+  resetChartLoading();
   chartController.setSymbolTimeframe(activeSymbol, activeInterval, config.subscribeOHLC);
   unsubscribeTickerFn = config.subscribeTicker(activeWatchlist(), (type, tick) => updateWatchlistRow(tick));
   saveView();
