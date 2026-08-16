@@ -8,9 +8,20 @@
   <meta name="description" content="A trading chart you can talk to. Live crypto and US stock candlesticks with an AI copilot panel.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23131722'/%3E%3Cpath d='M6 22 L12 14 L17 18 L26 7' stroke='%23f0a830' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
+  <!-- preconnect: the two cross-origin hosts the browser talks to directly
+       (unpkg for the chart lib below, Kraken for the crypto WS in
+       market-data.js). Alpaca is NOT here on purpose -- stocks go through
+       our own /api/stocks (same-origin), the browser never talks to Alpaca. -->
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="preconnect" href="https://ws.kraken.com">
   <!-- Pinned to a known-stable version deliberately -- v5 changed the series-creation API and
-       this build hasn't been verified against it. See README note. -->
-  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+       this build hasn't been verified against it. See README note.
+       defer (not a blocking head script): this was stalling first paint of
+       the whole page -- including the static "Loading chart data…" skeleton
+       below -- behind a third-party download. defer is safe here because
+       deferred scripts run in document order, so this still finishes before
+       app.js (also deferred, as a module) touches the LightweightCharts global. -->
+  <script defer src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
   <div class="app">
