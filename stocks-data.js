@@ -26,9 +26,21 @@ let tickerCallback = null;
 let ohlcSymbol = null;
 let ohlcCallback = null;
 let pollTimer = null;
+let historyAbortController = null;
 
-async function fetchJSON(url) {
-  const res = await fetch(url);
+// Last real error message from either the poll loop or a history load --
+// e.g. "Server is missing ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY." when
+// creds aren't configured yet, or Alpaca's own error text. Surfaced by
+// app.js next to the chart instead of a generic "reconnecting" label, since
+// that specific text is the fastest way to tell a real outage apart from a
+// config problem. Cleared on the next success from either path.
+let lastErrorMessage = null;
+export function getLastError() {
+  return lastErrorMessage;
+}
+
+async function fetchJSON(url, signal) {
+  const res = await fetch(url, { signal });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || `${url} -> ${res.status}`);
   return body;
@@ -50,12 +62,28 @@ function normalizeBar(b) {
   return { interval_begin: b.t, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v ?? 0 };
 }
 
-async function loadHistory(symbol, minutes) {
+// Short-lived cache for candle history. Keyed on symbol+timeframe, not
+// touched by poll()'s live prices at all -- this only saves the *initial*
+// bars fetch (a full Netlify Function + Alpaca roundtrip) when the user
+// flips back to a symbol/timeframe they were already looking at a few
+// seconds ago, e.g. clicking through the watchlist. TTL is short on purpose:
+// this is meant to kill redundant requests, not to serve genuinely old data.
+const HISTORY_CACHE_TTL_MS = 20000;
+const historyCache = new Map(); // `${symbol}|${minutes}` -> { bars, fetchedAt }
+
+async function loadHistory(symbol, minutes, signal) {
+  const key = `${symbol}|${minutes}`;
+  const cached = historyCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < HISTORY_CACHE_TTL_MS) return cached.bars;
+
   const timeframe = alpacaTimeframe(minutes);
   const data = await fetchJSON(
-    `${API_BASE}?action=history&symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=200`
+    `${API_BASE}?action=history&symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=200`,
+    signal
   );
-  return (data.bars ?? []).map(normalizeBar);
+  const bars = (data.bars ?? []).map(normalizeBar);
+  historyCache.set(key, { bars, fetchedAt: Date.now() });
+  return bars;
 }
 
 async function poll() {
@@ -64,6 +92,7 @@ async function poll() {
 
   try {
     const data = await fetchJSON(`${API_BASE}?action=quote&symbols=${encodeURIComponent(symbols.join(','))}`);
+    lastErrorMessage = null;
     setStatus('live');
 
     for (const symbol of tickerSymbols) {
@@ -79,7 +108,8 @@ async function poll() {
         ohlcCallback('update', [{ symbol: ohlcSymbol, ...normalizeBar(q.minuteBar) }]);
       }
     }
-  } catch {
+  } catch (err) {
+    lastErrorMessage = err.message;
     setStatus('reconnecting');
   }
 }
@@ -94,6 +124,7 @@ export function connectAlpaca() {
 export function disconnectAlpaca() {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = null;
+  historyAbortController?.abort();
 }
 
 export function onStatusChange(fn) {
@@ -118,9 +149,22 @@ export function subscribeTicker(symbols, callback) {
 export function subscribeOHLC(symbol, minutes, callback) {
   ohlcSymbol = symbol;
   ohlcCallback = callback;
-  loadHistory(symbol, minutes)
-    .then((bars) => callback('snapshot', bars.map((b) => ({ ...b, symbol }))))
-    .catch(() => setStatus('reconnecting'));
+
+  historyAbortController?.abort(); // supersede whatever the previous symbol/timeframe was still waiting on
+  const controller = new AbortController();
+  historyAbortController = controller;
+
+  loadHistory(symbol, minutes, controller.signal)
+    .then((bars) => {
+      lastErrorMessage = null;
+      callback('snapshot', bars.map((b) => ({ ...b, symbol })));
+    })
+    .catch((err) => {
+      if (err.name === 'AbortError') return; // superseded by a newer switch, not a real failure -- don't touch status
+      lastErrorMessage = err.message;
+      setStatus('reconnecting');
+    });
+
   return () => {
     if (ohlcSymbol === symbol) {
       ohlcSymbol = null;
