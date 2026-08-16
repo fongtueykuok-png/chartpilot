@@ -76,6 +76,17 @@ export function createChartController(container, { onData } = {}) {
   let currentSymbol = null;
   let currentInterval = null;
   let unsubscribeFn = null;
+  // Bumped on every setSymbolTimeframe call. subscribeOHLCFn's callback is
+  // wrapped below to close over the generation it was issued for -- if a
+  // slow response (Netlify Function cold start, Alpaca roundtrip) lands
+  // after a newer switch has already bumped this, it's stale and gets
+  // dropped instead of being painted over the symbol/timeframe the user is
+  // now actually looking at. Neither data source can be told to truly
+  // cancel a request that's already in flight (stocks-data.js does that
+  // itself via AbortController; Kraken's push over an open WS can't be
+  // "unsent" at all), so this is the guard that has to hold regardless of
+  // source.
+  let generation = 0;
   let lastPrice = null;
   let recentHigh = null;
   let recentLow = null;
@@ -187,6 +198,8 @@ export function createChartController(container, { onData } = {}) {
 
   function setSymbolTimeframe(symbol, interval, subscribeOHLCFn) {
     if (unsubscribeFn) unsubscribeFn();
+    generation += 1;
+    const myGeneration = generation;
     currentSymbol = symbol;
     currentInterval = interval;
     lastPrice = null;
@@ -195,7 +208,10 @@ export function createChartController(container, { onData } = {}) {
     bars = [];
     series.setData([]);
     volumeSeries.setData([]);
-    unsubscribeFn = subscribeOHLCFn(symbol, interval, handleBarUpdate);
+    unsubscribeFn = subscribeOHLCFn(symbol, interval, (type, rawBars) => {
+      if (myGeneration !== generation) return; // superseded by a later switch -- discard
+      handleBarUpdate(type, rawBars);
+    });
   }
 
   return {
