@@ -90,6 +90,7 @@ button { cursor: pointer; background: none; border: none; }
 .status-dot[data-state="connecting"] { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
 .status-dot[data-state="live"] { background: var(--up); }
 .status-dot[data-state="offline"] { background: var(--down); }
+.status-dot[data-state="reconnecting"] { background: var(--down); animation: pulse 1.4s ease-in-out infinite; } /* actively failing + retrying, not idle -- previously unstyled, fell through to the neutral default */
 .status-dot[data-state="closed"] { background: var(--text-muted); } /* expected state outside market hours, not an error -- no red, no pulse */
 .status-text { color: var(--text-secondary); font-size: 12px; }
 
@@ -279,6 +280,7 @@ button { cursor: pointer; background: none; border: none; }
   pointer-events: none;
 }
 .chart-loading.hidden { display: none; }
+.chart-loading.error { color: var(--down); text-align: center; padding: 0 24px; }
 
 /* ---------- AI Copilot panel ---------- */
 #copilot {
@@ -452,7 +454,7 @@ button { cursor: pointer; background: none; border: none; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: .5; } 30% { transform: translateY(-3px); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
-  .status-dot[data-state="connecting"] { animation: none; }
+  .status-dot[data-state="connecting"], .status-dot[data-state="reconnecting"] { animation: none; }
   .msg-loading span { animation: none; opacity: .6; }
 }
 
