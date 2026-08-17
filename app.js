@@ -140,9 +140,16 @@ const searchWrapEl = document.getElementById('symbol-search-wrap');
 const searchInputEl = document.getElementById('symbol-search-input');
 const searchResultsEl = document.getElementById('symbol-search-results');
 
-const chartController = createChartController(chartContainer, {
-  onData: () => chartLoading.classList.add('hidden'),
-});
+let chartController = null;
+try {
+  chartController = createChartController(chartContainer, {
+    onData: () => chartLoading.classList.add('hidden'),
+  });
+} catch (err) {
+  console.error('Chart init failed:', err);
+  chartLoading.textContent = 'Chart failed to load \u2014 try refreshing';
+  chartLoading.classList.add('error');
+}
 
 const CHART_LOADING_TEXT = 'Loading chart data\u2026';
 
@@ -249,7 +256,7 @@ function switchTimeframe(minutes) {
   activeInterval = minutes;
   renderTimeframes();
   resetChartLoading();
-  chartController.setSymbolTimeframe(activeSymbol, activeInterval, activeConfig().subscribeOHLC);
+  chartController?.setSymbolTimeframe(activeSymbol, activeInterval, activeConfig().subscribeOHLC);
   saveView();
 }
 
@@ -259,7 +266,7 @@ function switchSymbol(symbol) {
   symbolNameEl.textContent = symbol;
   lastHeaderPrice = null;
   resetChartLoading();
-  chartController.setSymbolTimeframe(activeSymbol, activeInterval, activeConfig().subscribeOHLC);
+  chartController?.setSymbolTimeframe(activeSymbol, activeInterval, activeConfig().subscribeOHLC);
   document.querySelectorAll('.watch-chip').forEach((chip) => {
     chip.setAttribute('aria-pressed', String(chip.dataset.symbol === symbol));
   });
@@ -310,7 +317,7 @@ function switchAssetClass(cls) {
   if (config.hasMarketHours) startMarketClockPolling();
 
   resetChartLoading();
-  chartController.setSymbolTimeframe(activeSymbol, activeInterval, config.subscribeOHLC);
+  chartController?.setSymbolTimeframe(activeSymbol, activeInterval, config.subscribeOHLC);
   unsubscribeTickerFn = config.subscribeTicker(activeWatchlist(), (type, tick) => updateWatchlistRow(tick));
   saveView();
 }
@@ -430,7 +437,7 @@ document.addEventListener('click', (e) => {
 });
 
 // --- Fullscreen ---
-fullscreenBtn.addEventListener('click', () => chartController.toggleFullscreen());
+fullscreenBtn.addEventListener('click', () => chartController?.toggleFullscreen());
 
 // --- Copilot responsive mode: popover (mobile sheet) vs static grid item (desktop) ---
 const copilotEl = document.getElementById('copilot');
@@ -455,7 +462,7 @@ symbolNameEl.textContent = activeSymbol;
 updateStatusDisplay();
 
 initCopilot({
-  getChartContext: () => chartController.getContext(),
+  getChartContext: () => chartController?.getContext() ?? null,
   getConnectionStatus: () => connectionStatus,
   getAssetClass: () => currentClass,
 });
@@ -463,4 +470,4 @@ initCopilot({
 activeConfig().connect?.();
 if (activeConfig().hasMarketHours) startMarketClockPolling();
 unsubscribeTickerFn = activeConfig().subscribeTicker(activeWatchlist(), (type, tick) => updateWatchlistRow(tick));
-chartController.setSymbolTimeframe(activeSymbol, activeInterval, activeConfig().subscribeOHLC);
+chartController?.setSymbolTimeframe(activeSymbol, activeInterval, activeConfig().subscribeOHLC);
